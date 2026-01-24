@@ -1,174 +1,94 @@
-import 'package:google_generative_ai/google_generative_ai.dart';
-import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 class GeminiService {
-  // API Keys - Replace with your actual keys
-  static const String _deepSeekApiKey = 'sk-be9f3818d7a0408d9bdd74c360fdc016';
-  static const String _geminiApiKey = 'YOUR_GEMINI_API_KEY'; // Optional backup
-
-  late final GenerativeModel? _flashModel;
-  late final Dio _dio;
-
-  GeminiService() {
-    // Setup Dio for DeepSeek Official API
-    _dio = Dio(BaseOptions(
-      baseUrl: 'https://api.deepseek.com/v1',
-      headers: {
-        'Authorization': 'Bearer ' + _deepSeekApiKey,
-        'Content-Type': 'application/json',
-      },
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
-
-    // Optional Gemini fallback
-    try {
-      if (_geminiApiKey != 'YOUR_GEMINI_API_KEY') {
-        _flashModel = GenerativeModel(
-          model: 'gemini-1.5-flash',
-          apiKey: _geminiApiKey,
-        );
-      } else {
-        _flashModel = null;
-      }
-    } catch (e) {
-      _flashModel = null;
-    }
-  }
-
-  // DeepSeek Official API (OpenAI-Compatible)
-  Future<String> _generateWithDeepSeek({
-    required String prompt,
-    required String systemPrompt,
-    bool stream = false,
-  }) async {
-    try {
-      final response = await _dio.post(
-        '/chat/completions',
-        data: {
-          'model': 'deepseek-chat',
-          'messages': [
-            {'role': 'system', 'content': systemPrompt},
-            {'role': 'user', 'content': prompt},
-          ],
-          'temperature': 0.7,
-          'max_tokens': 2048,
-          'stream': false,
-        },
-      );
-
-      if (response.data != null && response.data['choices'] != null) {
-        final choices = response.data['choices'] as List;
-        if (choices.isNotEmpty) {
-          final content = choices[0]['message']['content'];
-          return content.toString().trim();
-        }
-      }
-
-      return '';
-    } catch (e) {
-      print('DeepSeek API error: ' + e.toString());
-      return '';
-    }
-  }
+  // Replace with your actual Gemini API key
+  static const String _apiKey = 'AIzaSyCFXTVGQ7z_kVikQOpYwiy9el5HMtdzB8A';
 
   Future<String> generateInterviewQuestion({
     required String history,
     required String persona,
     String? resumeText,
   }) async {
-    final systemPrompt = persona == 'INTERVIEWER'
-        ? 'You are a strict technical interviewer. Ask one clear, specific technical question at a time. Keep responses concise and professional.'
-        : 'You are a friendly coding tutor. Help students learn with encouragement and clear explanations. Be supportive and concise.';
+    final role = persona == 'INTERVIEWER'
+        ? 'Strict Technical Interviewer'
+        : 'Friendly Coding Tutor';
 
-    var userPrompt = '';
+    var prompt = 'Role: ' + role + '\n\n';
     if (resumeText != null && resumeText.isNotEmpty) {
-      userPrompt += 'CANDIDATE RESUME:\n' + resumeText + '\n\n';
+      prompt += 'RESUME:\n' + resumeText + '\n\n';
     }
     if (history.isNotEmpty) {
-      userPrompt += 'CONVERSATION HISTORY:\n' + history + '\n\n';
+      prompt += 'HISTORY:\n' + history + '\n\n';
     }
-    userPrompt += 'Generate the next interview question based on the context above.';
+    prompt += 'Generate next interview question.';
 
-    // Try DeepSeek Official API (primary)
-    final deepSeekResponse = await _generateWithDeepSeek(
-      prompt: userPrompt,
-      systemPrompt: systemPrompt,
-    );
-
-    if (deepSeekResponse.isNotEmpty) {
-      return deepSeekResponse;
-    }
-
-    // Fallback to Gemini if available
-    if (_flashModel != null) {
-      try {
-        final prompt = systemPrompt + '\n\n' + userPrompt;
-        final response = await _flashModel!.generateContent([
-          Content.text(prompt)
-        ]);
-        return response.text ?? 'Error generating question';
-      } catch (e) {
-        print('Gemini fallback error: ' + e.toString());
-      }
-    }
-
-    return 'AI service unavailable. Please check your DeepSeek API key.';
+    return await _generateContent(prompt);
   }
 
   Future<String> reviewCode({
     required String language,
     required String code,
   }) async {
-    final systemPrompt = 'You are an expert ' + language +
-        ' code reviewer. Provide brief, actionable feedback on code quality, ' +
-        'potential bugs, and best practices. Be constructive and specific.';
-
-    final prompt = 'Review this code:\n\n' + code;
-
-    // Try DeepSeek first
-    final deepSeekResponse = await _generateWithDeepSeek(
-      prompt: prompt,
-      systemPrompt: systemPrompt,
-    );
-
-    if (deepSeekResponse.isNotEmpty) {
-      return deepSeekResponse;
-    }
-
-    // Fallback to Gemini
-    if (_flashModel != null) {
-      try {
-        final fullPrompt = systemPrompt + '\n\n' + prompt;
-        final response = await _flashModel!.generateContent([
-          Content.text(fullPrompt)
-        ]);
-        return response.text ?? 'No feedback available';
-      } catch (e) {
-        print('Gemini fallback error: ' + e.toString());
-      }
-    }
-
-    return 'Code review unavailable. Please check your API keys.';
+    final prompt = 'Review this ' + language + ' code:\n\n' + code;
+    return await _generateContent(prompt);
   }
 
-  // Streaming support (Gemini only for now)
-  Stream<String> streamResponse(String prompt) async* {
-    if (_flashModel != null) {
-      try {
-        final response = _flashModel!.generateContentStream([
-          Content.text(prompt)
-        ]);
+  Future<String> _generateContent(String prompt) async {
+    // Try multiple model names in order
+    final models = [
+      'gemini-1.5-flash-latest',
+      'gemini-1.5-flash-001',
+      'gemini-1.5-pro-latest',
+      'gemini-pro',
+    ];
 
-        await for (final chunk in response) {
-          yield chunk.text ?? '';
+    for (final modelName in models) {
+      try {
+        final url = Uri.parse(
+            'https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$_apiKey'
+        );
+
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'contents': [
+              {
+                'parts': [
+                  {'text': prompt}
+                ]
+              }
+            ],
+            'generationConfig': {
+              'temperature': 0.7,
+              'maxOutputTokens': 2048,
+            }
+          }),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+
+          if (data['candidates'] != null && data['candidates'].isNotEmpty) {
+            final text = data['candidates'][0]['content']['parts'][0]['text'];
+            print('Success with model: ' + modelName);
+            return text ?? 'No response generated';
+          }
+        } else {
+          print('Failed with $modelName: ${response.statusCode}');
+          continue; // Try next model
         }
       } catch (e) {
-        yield 'Error: ' + e.toString();
+        print('Error with $modelName: ' + e.toString());
+        continue; // Try next model
       }
-    } else {
-      yield 'Streaming not available without Gemini API key';
     }
+
+    return 'All models failed. Please check:\n1. Your API key is valid\n2. You have API access enabled\n3. Visit: https://aistudio.google.com/app/apikey';
+  }
+
+  Stream<String> streamResponse(String prompt) async* {
+    yield await _generateContent(prompt);
   }
 }
