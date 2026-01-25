@@ -15,7 +15,6 @@ dependencies:
   google_generative_ai: ^0.4.6
   file_picker: ^8.0.7
   http: ^1.2.2
-  dio: ^5.4.0
 
 dev_dependencies:
   flutter_test:

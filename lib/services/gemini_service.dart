@@ -1,94 +1,172 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 
 class GeminiService {
-  // Replace with your actual Gemini API key
-  static const String _apiKey = 'AIzaSyCFXTVGQ7z_kVikQOpYwiy9el5HMtdzB8A';
+  // Auto-detect: Use localhost if running on same device
+  static String get _ollamaUrl {
+    // Try localhost first, then network IP
+    return 'http://localhost:11434';
+    // Change to your IP only if running on different device:
+    // return 'http://192.168.1.100:11434';
+  }
+
+  static const String _modelName = 'gemma2:2b';
 
   Future<String> generateInterviewQuestion({
     required String history,
     required String persona,
     String? resumeText,
   }) async {
-    final role = persona == 'INTERVIEWER'
-        ? 'Strict Technical Interviewer'
-        : 'Friendly Coding Tutor';
+    final systemPrompt = persona == 'INTERVIEWER'
+        ? _getInterviewerPrompt()
+        : _getTutorPrompt();
 
-    var prompt = 'Role: ' + role + '\n\n';
+    var userContext = '';
     if (resumeText != null && resumeText.isNotEmpty) {
-      prompt += 'RESUME:\n' + resumeText + '\n\n';
+      userContext += 'RESUME:\n$resumeText\n\n';
     }
     if (history.isNotEmpty) {
-      prompt += 'HISTORY:\n' + history + '\n\n';
+      userContext += 'HISTORY:\n$history\n\n';
     }
-    prompt += 'Generate next interview question.';
 
-    return await _generateContent(prompt);
+    userContext += 'Ask next question.';
+
+    return await _generateWithOllama(systemPrompt, userContext);
+  }
+
+  String _getInterviewerPrompt() {
+    return '''Technical interviewer. Ask ONE short question (max 20 words).
+
+Rules:
+- ONE question only
+- No explanations
+- Clear and direct
+
+Question:''';
+  }
+
+  String _getTutorPrompt() {
+    return '''Friendly tutor. Give brief help (max 30 words).
+
+Rules:
+- Keep SHORT
+- Be encouraging
+- One point at a time
+
+Response:''';
   }
 
   Future<String> reviewCode({
     required String language,
     required String code,
   }) async {
-    final prompt = 'Review this ' + language + ' code:\n\n' + code;
-    return await _generateContent(prompt);
+    final userPrompt = '''Review this $language code in 2-3 sentences:
+
+$code
+
+Give: 1 strength, 1-2 issues.''';
+
+    return await _generateWithOllama('Code reviewer.', userPrompt);
   }
 
-  Future<String> _generateContent(String prompt) async {
-    // Try multiple model names in order
-    final models = [
-      'gemini-1.5-flash-latest',
-      'gemini-1.5-flash-001',
-      'gemini-1.5-pro-latest',
-      'gemini-pro',
-    ];
-
-    for (final modelName in models) {
+  Future<String> _generateWithOllama(String system, String prompt) async {
+    try {
+      // First check if Ollama is reachable
+      final testUrl = Uri.parse(_ollamaUrl);
       try {
-        final url = Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$_apiKey'
+        final testResponse = await http.get(testUrl).timeout(
+          const Duration(seconds: 2),
         );
-
-        final response = await http.post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt}
-                ]
-              }
-            ],
-            'generationConfig': {
-              'temperature': 0.7,
-              'maxOutputTokens': 2048,
-            }
-          }),
-        );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-
-          if (data['candidates'] != null && data['candidates'].isNotEmpty) {
-            final text = data['candidates'][0]['content']['parts'][0]['text'];
-            print('Success with model: ' + modelName);
-            return text ?? 'No response generated';
-          }
-        } else {
-          print('Failed with $modelName: ${response.statusCode}');
-          continue; // Try next model
+        if (testResponse.statusCode != 200) {
+          return _getConnectionHelp();
         }
       } catch (e) {
-        print('Error with $modelName: ' + e.toString());
-        continue; // Try next model
+        return _getConnectionHelp();
       }
-    }
 
-    return 'All models failed. Please check:\n1. Your API key is valid\n2. You have API access enabled\n3. Visit: https://aistudio.google.com/app/apikey';
+      // Now make the actual request
+      final url = Uri.parse('$_ollamaUrl/api/generate');
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'model': _modelName,
+          'prompt': '$system\n\n$prompt',
+          'stream': false,
+          'options': {
+            'temperature': 0.7,
+            'num_predict': 150,
+            'num_ctx': 2048,
+          }
+        }),
+      ).timeout(
+        const Duration(seconds: 30),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['response']?.trim() ?? 'No response';
+      } else {
+        return 'Ollama responded with error: ${response.statusCode}\n${response.body}';
+      }
+    } on TimeoutException {
+      return 'Request timeout. Model might be too slow.\n\nTry: ollama pull phi3:mini';
+    } on SocketException {
+      return _getConnectionHelp();
+    } catch (e) {
+      return 'Unexpected error: ${e.toString()}\n\n${_getConnectionHelp()}';
+    }
+  }
+
+  String _getConnectionHelp() {
+    return '''Cannot connect to Ollama at: $_ollamaUrl
+
+QUICK FIX:
+1. Open PowerShell
+2. Run: ollama serve
+3. Keep that window open
+4. Try again
+
+Current URL: $_ollamaUrl
+Model: $_modelName
+
+If Ollama is running but still fails:
+- Change _ollamaUrl to 'http://localhost:11434'
+- Make sure model is installed: ollama pull $_modelName''';
   }
 
   Stream<String> streamResponse(String prompt) async* {
-    yield await _generateContent(prompt);
+    try {
+      final url = Uri.parse('$_ollamaUrl/api/generate');
+      final request = http.Request('POST', url);
+      request.headers['Content-Type'] = 'application/json';
+      request.body = jsonEncode({
+        'model': _modelName,
+        'prompt': prompt,
+        'stream': true,
+        'options': {'num_predict': 150}
+      });
+
+      final streamedResponse = await request.send();
+
+      await for (final chunk in streamedResponse.stream.transform(utf8.decoder)) {
+        try {
+          final lines = chunk.split('\n').where((line) => line.isNotEmpty);
+          for (final line in lines) {
+            final data = jsonDecode(line);
+            if (data['response'] != null) {
+              yield data['response'];
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+    } catch (e) {
+      yield 'Stream error: ${e.toString()}';
+    }
   }
 }

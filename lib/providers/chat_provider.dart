@@ -30,11 +30,20 @@ class ChatProvider with ChangeNotifier {
     ));
     notifyListeners();
   }
-
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty) return;
 
     addMessage(sender: Sender.user, text: text);
+
+    // Add immediate "thinking" indicator
+    final thinkingId = const Uuid().v4();
+    _messages.add(Message(
+      id: thinkingId,
+      sender: Sender.ai,
+      text: '...',
+      timestamp: DateTime.now(),
+    ));
+
     _isLoading = true;
     notifyListeners();
 
@@ -44,6 +53,7 @@ class ChatProvider with ChangeNotifier {
           : _messages;
 
       final history = recent
+          .where((m) => m.id != thinkingId)  // Exclude thinking message
           .map((m) => m.sender.name + ': ' + m.text)
           .join('\n');
 
@@ -52,9 +62,13 @@ class ChatProvider with ChangeNotifier {
         persona: _persona,
       );
 
+      // Remove thinking indicator
+      _messages.removeWhere((m) => m.id == thinkingId);
+
       _isLoading = false;
       addMessage(sender: Sender.ai, text: response);
     } catch (e) {
+      _messages.removeWhere((m) => m.id == thinkingId);
       _isLoading = false;
       addMessage(sender: Sender.system, text: 'Error: ' + e.toString());
     }
