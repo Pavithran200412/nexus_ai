@@ -12,7 +12,7 @@ class GeminiService {
     // return 'http://192.168.1.100:11434';
   }
 
-  static const String _modelName = 'gemma2:2b';
+  static const String _modelName = 'gemma3:4b';
 
   Future<String> generateInterviewQuestion({
     required String history,
