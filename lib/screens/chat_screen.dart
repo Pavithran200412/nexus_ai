@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/message_bubble.dart';
+import '../services/voice_service.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({Key? key}) : super(key: key);
@@ -12,6 +13,41 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
+  final VoiceService _voiceService = VoiceService();
+  bool _isListening = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initVoice();
+  }
+
+  void _initVoice() async {
+    await _voiceService.init();
+  }
+
+  void _toggleListening() async {
+    if (_isListening) {
+      await _voiceService.stopListening();
+      setState(() => _isListening = false);
+    } else {
+      final available = await _voiceService.startListening(
+        onResult: (text) {
+          setState(() {
+            _controller.text = text;
+          });
+        },
+        onStatus: (status) {
+            if (status == 'notListening') {
+              setState(() => _isListening = false);
+            }
+        },
+      );
+      if (available) {
+        setState(() => _isListening = true);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -75,6 +111,13 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     onSubmitted: (_) => _sendMessage(),
                   ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    _isListening ? Icons.mic : Icons.mic_none,
+                    color: _isListening ? Colors.red : null,
+                  ),
+                  onPressed: _toggleListening,
                 ),
                 IconButton(
                   icon: const Icon(Icons.send),

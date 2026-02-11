@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../services/gemini_service.dart';
+import '../services/voice_service.dart';
 
 class ChatProvider with ChangeNotifier {
   final List<Message> _messages = [];
@@ -67,6 +68,12 @@ class ChatProvider with ChangeNotifier {
 
       _isLoading = false;
       addMessage(sender: Sender.ai, text: response);
+      
+      // Speak the response
+      final voiceService = VoiceService();
+      await voiceService.init();
+      await voiceService.speak(response);
+      
     } catch (e) {
       _messages.removeWhere((m) => m.id == thinkingId);
       _isLoading = false;
